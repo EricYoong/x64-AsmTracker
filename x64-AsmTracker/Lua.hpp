@@ -316,6 +316,16 @@ void LuaInit() {
 		//check if reg is a valid register..
 		SetAlias(reg, str);
 		});
+	lua.set_function("ClearFrames", []() {
+		ResetDbg();
+		regTracker->frames.clear();
+		ListTrace();
+		});
+	lua.set_function("PushFrame", [](DWORD64 rip) {
+		CRegisterFrame f = rip;
+		regTracker->frames.push_back(f);
+		ListTrace();
+		});
 
 	lua.set_function("GetBase", []() {
 		return dbg.procBase;

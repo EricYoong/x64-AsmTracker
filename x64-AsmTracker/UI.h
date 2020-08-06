@@ -43,6 +43,7 @@ public:
 		vTrace.clear();
 	}
 	ZydisRegister r = 0;
+	DWORD regSize;
 	DWORD64 rva;
 	ASM_OP op;
 	bool formulaPrinted = false;
@@ -70,6 +71,11 @@ public:
 	}
 	CRegisterFrame(CONTEXT _ctx) : ctx(_ctx) {
 		idx = c_idx++;
+		rva = ctx.Rip - dbg.procBase;
+	}
+	CRegisterFrame(DWORD64 rip)  {
+		idx = c_idx++;
+		ctx.Rip = rip;
 		rva = ctx.Rip - dbg.procBase;
 	}
 	char* get_instruction_string() {

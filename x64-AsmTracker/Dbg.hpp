@@ -47,6 +47,7 @@ public:
 
 	DWORD64 procBase;
 	std::string filename;
+	DWORD dwAttached = 0;
 	bool AttachProcess(DWORD pid) {
 
 		auto r = DebugActiveProcess(pid);
@@ -65,9 +66,16 @@ public:
 			procBase = dbg.Read <DWORD64>(c.Rdx + 0x10);*/
 
 			debuggeeStatus = DebuggeeStatus::SUSPENDED;
-			printf("T[%i] P[%04X] Process launched and suspended. [%p]\n", debuggeethreadID, debuggeeprocessID, procBase);
+			printf("T[%i] P[%04X] Process attached and suspended. [%p]\n", debuggeethreadID, debuggeeprocessID, procBase);
+			dwAttached = pid;
 		}
 		return r;
+	}
+	void Detach() {
+		if (dwAttached) {
+			DebugActiveProcessStop(dwAttached);
+			dwAttached = 0;
+		}
 	}
 	void InitProcess(const char*szFile) {
 		STARTUPINFOA startupinfo = { 0 };
@@ -124,7 +132,7 @@ public:
 		SetContext(&c);
 	}
 	void Run() {
-		//printf("rstate: %i\n", debuggeeStatus);
+		printf("rstate: %i\n", debuggeeStatus);
 		if (debuggeeStatus == DebuggeeStatus::NONE)
 		{
 			//std::cout << "Debuggee is not started yet." << std::endl;
@@ -142,10 +150,15 @@ public:
 		}
 
 		DEBUG_EVENT debugEvent;
-		//printf("wait dbg!\n");
+		printf("wait dbg!\n");
 		while (WaitForDebugEvent(&debugEvent, INFINITE) == TRUE)
 		{
-			//printf("got dbg! %i\n",debugEvent.dwDebugEventCode);
+			/*static bool bWarning = false;
+			if (debugEvent.dwDebugEventCode == 4) bWarning = true;
+			if (bWarning) {
+				MessageBoxA(0, "A", "A", 0);
+			}*/
+			printf("got dbg! %i\n",debugEvent.dwDebugEventCode);
 			debuggeeprocessID = debugEvent.dwProcessId;
 			debuggeethreadID = debugEvent.dwThreadId;
 			if (DispatchDebugEvent(debugEvent) == TRUE)
@@ -250,7 +263,7 @@ public:
 			//auto c = GetContext();
 			//c.Rip = procBase + 0xE74D84;
 			//dbg.SetContext(&c);
-			return false;
+			return dwAttached ? false : true;
 
 			/*case BpType::CODE:
 				return onNormalBreakPoint(pInfo);

@@ -306,6 +306,9 @@ public:
 
 		SetWindowText(gui.hwndEdit, str);
 	}
+	void UpdateFrames() {
+		SendMessage(hListView, LVM_SETITEMCOUNT, regTracker->frames.size() - 1, 0);
+	}
 } gui;
 
 #include <filesystem>
@@ -426,7 +429,7 @@ template <class T>
 bool VectorContains(std::vector<T> vec,T cmp) {
 	bool bListed = false;
 	for (DWORD k = 0; !bListed && k < vec.size(); k++) {
-		if (cmp == vec[k]) bListed = true;
+		if (cmp->rva == vec[k]->rva) bListed = true;
 	}
 	return bListed;
 }
@@ -472,6 +475,7 @@ DWORD CRegisterTrace::opCount() {
 				sprintf_s(buf, 64, "[F_%p + 0x%X]", op.r1->rva, op.iValue);
 
 			}
+			if (regSize == 4) return "(DWORD)" + std::string(buf);
 			return buf;
 			break;
 		}
@@ -496,7 +500,7 @@ DWORD CRegisterTrace::opCount() {
 					return op.alias;//alias is reg name
 				}
 				char buf[64];
-				sprintf_s(buf, 64, "[%s / 0x%08X]", op.alias.c_str(), rva);
+				sprintf_s(buf, 64, "%s[%s / 0x%08X]",regSize==4?"(DWORD)":"",  op.alias.c_str(), rva);
 				return buf;
 				//else return op.alias;
 			}
@@ -531,6 +535,7 @@ DWORD CRegisterTrace::opCount() {
 			else {
 				sprintf_s(buf, 124, "__ROR8__(F_%p, 0x%02X)", op.r1->rva, op.iValue);
 			}
+			if (op.r1->regSize == 4) return "(DWORD)" + std::string(buf);
 			return buf;
 			break;
 		case ROL:
@@ -544,6 +549,7 @@ DWORD CRegisterTrace::opCount() {
 			else {
 				sprintf_s(buf, 124, "__ROL8__(F_%p, 0x%02X)", op.r1->rva, op.iValue);
 			}
+			if (op.r1->regSize == 4) return "(DWORD)" + std::string(buf);
 			return buf;
 			break;
 		case SHR:
@@ -557,6 +563,7 @@ DWORD CRegisterTrace::opCount() {
 			else {
 				sprintf_s(buf, 124, "F_%p >> 0x%02X", op.r1->rva, op.iValue);
 			}
+			if (op.r1->regSize == 4) return "(DWORD)" + std::string(buf);
 			return buf;
 			break;
 		case SHL:
@@ -570,6 +577,7 @@ DWORD CRegisterTrace::opCount() {
 			else {
 				sprintf_s(buf, 124, "F_%p << 0x%02X", op.r1->rva, op.iValue);
 			}
+			if (op.r1->regSize == 4) return "(DWORD)" + std::string(buf);
 			return buf;
 			break;
 
@@ -604,6 +612,9 @@ DWORD CRegisterTrace::opCount() {
 			else {*/
 				ret += op.r1->get_operation();
 			//}
+		}
+		if (regSize == 4) {
+			return "(DWORD)" + ret;
 		}
 		return ret;
 	}
@@ -660,7 +671,7 @@ DWORD CRegisterTrace::opCount() {
 							}
 						}
 						if (_op == op) {
-							vFormulas->push_back(op);
+							if (!VectorContains(*vFormulas, op))vFormulas->push_back(op);
 						}
 					}
 				}
@@ -702,9 +713,17 @@ std::vector< CRegisterTrace*> vTraces;
 			auto inst = &_inst;
 			DWORD _idx = it->idx;
 			if (inst) {
-				if (inst->operands[0].reg.value == r ||
-					(inst->mnemonic == ZYDIS_MNEMONIC_BSWAP && inst->operands[1].mem.base == r)) {
 
+				bool is64Reg = ZYDIS_REGISTER_RAX <= r && r <= ZYDIS_REGISTER_R15;
+				bool is32Reg = ZYDIS_REGISTER_EAX <= r && r <= ZYDIS_REGISTER_R15D;
+				DWORD _32Reg = r - 16;
+				bool is32SubReg = (is64Reg && inst->operands[0].reg.value == _32Reg);
+				if (inst->operands[0].reg.value == r ||
+					(inst->mnemonic == ZYDIS_MNEMONIC_BSWAP && inst->operands[1].mem.base == r) ||
+					is32SubReg
+					) {
+					ret->regSize = is32Reg?4: 8;
+					if (is32SubReg) ret->regSize = 4;
 					pRip = inst->instrAddress;
 					//printf("[%i > %i] track %s at %p\n", idx,_idx, ZydisRegisterGetString(r), pRip);
 					ret->rva = pRip - dbg.procBase;
@@ -919,14 +938,17 @@ std::string find_alias(ZydisRegister r) {
 }
 
 void ListTrace() {
-	SendMessage(gui.hListView, LVM_SETITEMCOUNT, regTracker->frames.size()-1, 0);
+	gui.UpdateFrames();
 }
 void StepOver() {
 
 	CONTEXT c = dbg.GetContext();
 	CRegisterFrame f = c;
 	regTracker->frames.push_back(f);
+
+	//printf("single step START %p\n", dbg.GetContext().Rip);
 	dbg.SingleStep();
+	//printf("single step END %p\n", dbg.GetContext().Rip);
 	if (bExcept) {
 		//skip?
 		printf("GOT EXCEPT!\n");
@@ -1097,7 +1119,7 @@ std::string ReadFileAsBinary(std::string const& path) {
 	return sresult;
 }
 bool CScriptGUI::SetCurScript(DWORD idx) {
-	if (scriptGui->iCurScript != idx) {
+	if (scriptGui->iCurScript != idx && idx <= base_scripts.size()) {
 		scriptGui->iCurScript = idx;
 		SendMessage(hScriptBox, LB_SETCURSEL, idx, 0);
 		if (idx == 0) {
@@ -1405,6 +1427,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 	case WM_DESTROY:
 	{
 		SaveCfg();
+		//dbg.Detach();
 		ExitProcess(0);
 		PostQuitMessage(0);
 		return 0;
