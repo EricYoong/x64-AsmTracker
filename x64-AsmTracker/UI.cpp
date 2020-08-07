@@ -810,9 +810,19 @@ std::vector< CRegisterTrace*> vTraces;
 							ret->op.r0 = r0_track;
 
 							if (inst->operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY) {
-								auto r1_track = track(inst->operands[1].mem.base, _idx);
-								ret->op.r1 = r1_track;
-								//ret->op.r1->op.op = BSWAP;//hardcode to bswap..
+								if (inst->operands[1].mem.base == ZYDIS_REGISTER_RSP) {
+									//hardcode from stack?
+									ret->op.r1 = track(inst->operands[1].mem.base, _idx);//reg trace for static stack value
+									ret->op.r1->op.op = SET;
+									auto rsp = it->ctx.Rsp;//get rsp from frame ctx
+									auto qVal = Read<DWORD64>(rsp + inst->operands[1].mem.disp.value);
+									ret->op.r1->op.iValue = qVal;
+								}
+								else {
+									auto r1_track = track(inst->operands[1].mem.base, _idx);
+									ret->op.r1 = r1_track;
+									//ret->op.r1->op.op = BSWAP;//hardcode to bswap..
+								}
 							}
 							else {
 								auto r1_track = track(inst->operands[1].reg.value, _idx);
