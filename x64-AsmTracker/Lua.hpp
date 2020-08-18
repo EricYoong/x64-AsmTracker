@@ -14,7 +14,7 @@ extern void LoadFile(std::string);
 extern void LoadPreviousFile();
 extern void ResetDbg();
 extern void SetAlias(DWORD reg, std::string str);
-std::string DumpFormula(CRegisterTrace* r0_track);
+std::string DumpFormula(CRegisterTrace* r0_track,std::string);
 
 
 #include <vector>
@@ -261,6 +261,15 @@ void LuaInit() {
 	rtbl["rva"] = &CRegisterTrace::rva;
 	rtbl["dump"] = DumpFormula;
 
+	auto zitbl = lua.new_usertype<ZydisDecodedInstruction>("ZydisDecodedInstruction");
+	zitbl["mnemonic"] = &ZydisDecodedInstruction::mnemonic;
+	zitbl["length"] = &ZydisDecodedInstruction::length;
+	zitbl["reg_0"] = sol::property([](ZydisDecodedInstruction* it) {
+		return (DWORD)it->operands[0].reg.value;
+		});
+	zitbl["reg_1"] = sol::property([](ZydisDecodedInstruction* it) {
+		return (DWORD)it->operands[1].reg.value;
+		});
 
 	lua.set_function("CreateProcess", [](const char* szFile) {
 
@@ -339,7 +348,7 @@ void LuaInit() {
 		bool bLoop = true;
 		while (bLoop) {
 			auto it = Decode(reg);
-			auto ret = callback(reg,it);
+			auto ret = callback(reg, it);
 			bLoop = ret.valid() && ret;
 			reg += it.length;
 		}
@@ -391,8 +400,11 @@ void LuaInit() {
 		});
 	lua.set_function("LoadFile", LoadFile);
 
-		lua.set_function("LoadPreviousFile", []() {
+	lua.set_function("LoadPreviousFile", []() {
 		LoadPreviousFile();
+		});
+	lua.set_function("ReadDword", [](DWORD64 rva) {
+		return Read<DWORD>(dbg.procBase + rva);
 		});
 
 	printf("Lua Init!\n");

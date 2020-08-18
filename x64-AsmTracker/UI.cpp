@@ -460,7 +460,7 @@ DWORD CRegisterTrace::opCount() {
 		switch (op.op) {
 		case SET: {
 			if (op.mem_base)
-				sprintf_s(buf, 64, "(BASE_MEM+0x%X)", op.iValue);
+				sprintf_s(buf, 64, "(BASE_MEM + 0x%X)", op.iValue);
 			else
 				sprintf_s(buf, 32, "0x%p", op.iValue);
 			ret = buf;
@@ -469,7 +469,12 @@ DWORD CRegisterTrace::opCount() {
 		case MEM: {
 			//printf("mem %p / %p\n", rva,op.r1->rva);
 			if (op.r1->op.op == REGISTER || op.r1->op.op == BSWAP) {
-				sprintf_s(buf, 64, "[%s + 0x%X]", op.r1->get_operation().c_str(), op.iValue);
+				if (op.r1->op.iValue == ZYDIS_REGISTER_RIP) {
+					sprintf_s(buf, 64, "[BASE_MEM + 0x%p]",this->rva + op.iValue+7);
+				}
+				else {
+					sprintf_s(buf, 64, "[%s + 0x%X]", op.r1->get_operation().c_str(), op.iValue);
+				}
 			}
 			else {
 				sprintf_s(buf, 64, "[F_%p + 0x%X]", op.r1->rva, op.iValue);
@@ -479,9 +484,18 @@ DWORD CRegisterTrace::opCount() {
 			return buf;
 			break;
 		}
-		case BSWAP:
-			return "BSWAP";
+		case BSWAP: {
+			std::vector< CRegisterTrace*> formulas;
+			if (op.r0->op.r1 == NULL && op.r0->op.mem_base) {
+				sprintf_s(buf, 64, "BSWAP([BASE_MEM + 0x%X])", op.r0->op.iValue);
+				return buf;
+			}
+			//return "BSWAP";
+			auto bswap_form = op.r0->op.r1->get_formula(&formulas);
+			sprintf_s(buf, 64, "BSWAP%s", bswap_form.c_str());
+			return buf;
 			break;
+		}
 		case ALIAS:
 			return op.alias;
 			break;
@@ -732,8 +746,8 @@ std::vector< CRegisterTrace*> vTraces;
 						ret->op.op = BSWAP;
 						//r0 is register..
 
-						//auto r0_track = track(inst->operands[1].reg.value, _idx);
-						//ret->op.r0 = r0_track;
+						auto r0_track = track(inst->operands[0].reg.value, _idx);
+						ret->op.r0 = r0_track;
 					} else if (inst->mnemonic == ZYDIS_MNEMONIC_MOVSXD) {
 						//make sure to note its a WORD
 						ret->op.op = REGISTER;
@@ -833,10 +847,17 @@ std::vector< CRegisterTrace*> vTraces;
 					}
 					else if (inst->mnemonic == ZYDIS_MNEMONIC_XOR) {
 						auto r0_track = track(inst->operands[0].reg.value, _idx);
-						auto r1_track = track(inst->operands[1].reg.value, _idx);
 						ret->op.op = XOR;
 						ret->op.r0 = r0_track;
-						ret->op.r1 = r1_track;
+						if (inst->operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY) {
+							ret->op.iValue = it->rva+ inst->operands[1].mem.disp.value +7;
+							//printf("is xoR! %i\n", ret->op.iValue);
+							ret->op.mem_base = true;
+						}
+						else {
+							auto r1_track = track(inst->operands[1].reg.value, _idx);
+							ret->op.r1 = r1_track;
+						}
 					}
 					else if (inst->mnemonic == ZYDIS_MNEMONIC_ROL || inst->mnemonic == ZYDIS_MNEMONIC_ROR) {
 						ret->op.op = inst->mnemonic == ZYDIS_MNEMONIC_ROL ? ROL:ROR;
@@ -927,10 +948,14 @@ std::vector< CRegisterTrace*> vTraces;
 			ret->op.op = REGISTER;
 			ret->op.alias = ZydisRegisterGetString(r);
 			ret->op.iValue = r;
-			/*auto f = register_alias.find(r);
-			if (f != register_alias.end()) {
-				ret->op.alias = register_alias[r];
-			}*/
+
+			/* WARNING MAYBE WE SHOULD TRACK IF REGISTER WAS NOT MODIFIED / USED???*/
+			//if (track(r,_idx )->rva == 0) {//track this register here..
+				auto f = register_alias.find(r);
+				if (f != register_alias.end()) {
+					ret->op.alias = register_alias[r];
+				}
+			//}
 			//ret->rva = 1;
 		}
 		//add to list..
@@ -1006,6 +1031,10 @@ void ShowDisasm() {
 			str += buffer;
 			rip += instruction.length;
 		}
+		else {
+			str += "???";
+			rip++;
+		}
 
 		SendMessage(gui.hListBox, LB_ADDSTRING, 0, (LPARAM)str.c_str());
 
@@ -1014,13 +1043,13 @@ void ShowDisasm() {
 
 }
 
-std::string DumpFormula(CRegisterTrace* r0_track) {
+std::string DumpFormula(CRegisterTrace* r0_track,std::string optName ) {
 
 	std::vector< CRegisterTrace*> formulas;
 	auto formula = r0_track->get_formula(&formulas);
 
-	char buf[256];
-	sprintf_s(buf, 124, "%i sub-formulas\r\n", formulas.size());
+	char buf[1024];
+	sprintf_s(buf, 124, "//%i sub-formulas\r\n", formulas.size());
 	std::string str = buf;
 	for (auto it = formulas.rbegin(); it != formulas.rend(); ++it)
 	{
@@ -1029,7 +1058,7 @@ std::string DumpFormula(CRegisterTrace* r0_track) {
 		sprintf_s(buf, 256, "auto F_%p = %s;\r\n", f->rva, f->get_formula(&vFormulas).c_str());
 		str += buf;
 	}
-	sprintf_s(buf, 124, "auto _F = %s;\r\n", formula.c_str());
+	sprintf_s(buf, 1024, "auto %s_F = %s;\r\n", optName.c_str(), formula.c_str());
 	str += buf;
 	return str;
 }
@@ -1085,7 +1114,7 @@ void ShowTrace(int idx) {
 		}
 	}
 	//print needed formulas too..
-	str = DumpFormula(r0_track);
+	str = DumpFormula(r0_track,"dec");
 
 	gui.SetLog(str.c_str());
 }
@@ -1245,6 +1274,7 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 					}
 					else {
 						//comment
+						char cComment[256] = { 0 };
 						if (f.iComment == 0 && bShowComments) {//look for comment..
 							//printf("gen comment.. %p\n",f.rva);
 							f.iComment = 3; //means we scanned
@@ -1255,9 +1285,8 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 							auto t = regTracker->track(instruction.operands[0].reg.value, idx + 1);
 							if (t && regTracker->register_alias.find(instruction.operands[0].reg.value) != regTracker->register_alias.end()) {
 								f.iComment = 1;
-								char cComment[256];
 								std::vector< CRegisterTrace*> vFormulas;
-								sprintf_s(cComment, 256, "%s = %s %s //%s", ZydisRegisterGetString(instruction.operands[0].reg.value), ZydisRegisterGetString(instruction.operands[0].reg.value), t->get_operation().c_str(), t->op.r1->get_formula(&vFormulas).c_str());
+								sprintf_s(cComment, 256, "%s = %s %s //%s", ZydisRegisterGetString(instruction.operands[0].reg.value), ZydisRegisterGetString(instruction.operands[0].reg.value), t->get_operation().c_str(), "F");// t->op.r1->get_formula(&vFormulas).c_str());
 								f.comment = cComment;
 							}
 							else {
@@ -1267,7 +1296,6 @@ LRESULT CALLBACK WindowProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPara
 
 									(regTracker->register_alias.find(instruction.operands[1].reg.value) != regTracker->register_alias.end())
 									) {
-									char cComment[256];
 									sprintf_s(cComment, 256, "%s = %s", ZydisRegisterGetString(instruction.operands[0].reg.value), t->get_operation().c_str());
 									f.comment = cComment;
 								}
